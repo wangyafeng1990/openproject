@@ -107,7 +107,22 @@ module API
 
                 work_package_representer
               else
-                fail ::API::Errors::ErrorBase.create_and_merge_errors(call.errors)
+                errors = call.errors
+
+                if call.errors.empty?
+                  errors = ActiveModel::Errors.new @work_package
+
+                  call.dependent_results.each do |dr|
+                    dr.errors.each do |field, _message|
+                      dr.errors.symbols_and_messages_for(field).each do |symbol, full_message, _|
+                        errors.add field, symbol, message: "Fehler im abhängigen Arbeitspaket ##{dr.result.id} #{dr.result.subject}: #{full_message}"
+                      end
+                    end
+                  end
+                end
+
+                api_errors = ::API::Errors::ErrorBase.create_and_merge_errors(errors.to_s)
+                fail ::API::Errors::MultipleErrors.create_if_many(api_errors)
               end
             end
 
