@@ -57,7 +57,7 @@ module API
                                                         current_user: current_user,
                                                         embed_links: true)
           else
-            fail ::API::Errors::ErrorBase.create_and_merge_errors(result.errors)
+            handle_work_package_errors @work_package, result
           end
         end
 

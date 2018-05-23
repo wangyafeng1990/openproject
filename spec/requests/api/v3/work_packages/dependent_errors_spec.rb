@@ -38,12 +38,13 @@ describe 'API v3 Work package resource', type: :request, content_type: :json do
     FactoryGirl.create(
       :work_package,
       project_id: project.id,
-      parent: parent
+      parent: parent,
+      subject: "Updated WorkPackage"
     )
   end
 
-  let(:parent) do
-    FactoryGirl.create(:work_package, project_id: project.id, type: type).tap do |parent|
+  let!(:parent) do
+    FactoryGirl.create(:work_package, project_id: project.id, type: type, subject: "Invalid Dependent WorkPackage").tap do |parent|
       parent.custom_values.create custom_field: custom_field, value: custom_field.possible_values.first.id
 
       cv = parent.custom_values.last
@@ -63,6 +64,8 @@ describe 'API v3 Work package resource', type: :request, content_type: :json do
     end
   end
 
+  let(:status) { FactoryGirl.create :status }
+
   let(:custom_field) do
     FactoryGirl.create(
       :list_wp_custom_field,
@@ -73,7 +76,7 @@ describe 'API v3 Work package resource', type: :request, content_type: :json do
   end
 
   let(:role) { FactoryGirl.create(:role, permissions: permissions) }
-  let(:permissions) { [:view_work_packages, :edit_work_packages] }
+  let(:permissions) { [:view_work_packages, :edit_work_packages, :create_work_packages] }
 
   let(:current_user) do
     user = FactoryGirl.create(:user, member_in_project: project, member_through_role: role)
@@ -83,16 +86,24 @@ describe 'API v3 Work package resource', type: :request, content_type: :json do
     user
   end
 
+  let(:dependent_error_result) do
+    proc do |instance, _attributes, work_package|
+      result = ServiceResult.new(success: true, result: instance.work_package || work_package)
+      dep = parent
+      dep.errors.add :base, "invalid", message: "invalid"
+
+      result.add_dependent!(ServiceResult.new(success: false, errors: dep.errors, result: dep))
+
+      result
+    end
+  end
+
   before do
     allow(User).to receive(:current).and_return current_user
-
-    # some way some of these specs rely on this setting being disabled
-    # so we set it excplicitly as a precondition
-    Setting.cross_project_work_package_relations = 0
   end
 
   describe '#patch' do
-    let(:patch_path) { api_v3_paths.work_package work_package.id }
+    let(:path) { api_v3_paths.work_package work_package.id }
     let(:valid_params) do
       {
         _type: 'WorkPackage',
@@ -104,20 +115,87 @@ describe 'API v3 Work package resource', type: :request, content_type: :json do
 
     shared_context 'patch request' do
       before(:each) do
-        # allow(User).to receive(:current).and_return current_user
-        patch patch_path, params.to_json, 'CONTENT_TYPE' => 'application/json'
+        patch path, params.to_json, 'CONTENT_TYPE' => 'application/json'
       end
     end
 
-    context 'subject' do
-      let(:params) { valid_params.merge(percentageDone: 65) }
+    before do
+      allow_any_instance_of(WorkPackages::UpdateService).to receive(:update_dependent, &dependent_error_result)
+    end
+
+    context 'attribute' do
+      let(:params) { valid_params.merge(startDate: "2018-05-23") }
 
       include_context 'patch request'
 
-      it { expect(response.status).to eq(200) }
+      it { expect(response.status).to eq(422) }
 
-      it 'should respond with updated work package subject' do
-        expect(subject.body).to be_json_eql(65).at_path('percentageDone')
+      it 'should respond with an error' do
+        expected_error = {
+          "_type": "Error",
+          "errorIdentifier": "urn:openproject-org:api:v3:errors:PropertyConstraintViolation",
+          "message": "Error in dependent work package ##{parent.id} #{parent.subject}: invalid",
+          "_embedded": {
+            "details": {
+              "attribute": "base"
+            }
+          }
+        }
+
+        expect(subject.body).to be_json_eql(expected_error.to_json)
+      end
+    end
+  end
+
+  describe '#post' do
+    let(:current_user) { FactoryGirl.create :admin }
+
+    let(:path) { api_v3_paths.work_packages }
+    let(:valid_params) do
+      {
+        _type: 'WorkPackage',
+        lockVersion: 0,
+        _links: {
+          author: { href: "/api/v3/users/#{current_user.id}" },
+          project: { href: "/api/v3/projects/#{project.id}" },
+          status: { href: "/api/v3/statuses/#{status.id}" },
+          priority: { href: "/api/v3/priorities/#{work_package.priority.id}" }
+        }
+      }
+    end
+
+    subject(:response) { last_response }
+
+    shared_context 'post request' do
+      before(:each) do
+        post path, params.to_json, 'CONTENT_TYPE' => 'application/json'
+      end
+    end
+
+    before do
+      allow_any_instance_of(WorkPackages::CreateService).to receive(:create, &dependent_error_result)
+    end
+
+    context 'request' do
+      let(:params) { valid_params.merge(subject: "Test Subject") }
+
+      include_context 'post request'
+
+      it { expect(response.status).to eq(422) }
+
+      it 'should respond with an error' do
+        expected_error = {
+          "_type": "Error",
+          "errorIdentifier": "urn:openproject-org:api:v3:errors:PropertyConstraintViolation",
+          "message": "Error in dependent work package ##{parent.id} #{parent.subject}: invalid",
+          "_embedded": {
+            "details": {
+              "attribute": "base"
+            }
+          }
+        }
+
+        expect(subject.body).to be_json_eql(expected_error.to_json)
       end
     end
   end

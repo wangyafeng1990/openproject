@@ -107,7 +107,6 @@ module API
 
                 work_package_representer
               else
-                # fail ::API::Errors::ErrorBase.create_and_merge_errors(call.errors) # old code
                 handle_work_package_errors @work_package, call
               end
             end
