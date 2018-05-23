@@ -79,6 +79,33 @@ module API
           end
         end
 
+        def handle_work_package_errors(work_package, result)
+          errors = result.errors
+
+          if errors.empty?
+            errors = ActiveModel::Errors.new work_package
+
+            result.dependent_results.each do |dr|
+              dr.errors.each do |field, _message|
+                dr.errors.symbols_and_messages_for(field).each do |symbol, full_message, _|
+                  dependent_error = I18n.t(
+                    :error_dependent_work_package,
+                    related_id: dr.result.id,
+                    related_subject: dr.result.subject,
+                    error: full_message
+                  )
+
+                  errors.add :base, symbol, message: dependent_error
+                end
+              end
+            end
+          end
+
+          api_errors = [::API::Errors::ErrorBase.create_and_merge_errors(errors)]
+
+          fail ::API::Errors::MultipleErrors.create_if_many(api_errors)
+        end
+
         private
 
         def custom_field_context_changed?(work_package)
